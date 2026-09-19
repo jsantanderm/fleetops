@@ -1,0 +1,1781 @@
+// =====================================================
+// PRÆTOR FleetOps
+// Cliente GPS + Estados + Viajes
+// PREPRODUCCIÓN
+// =====================================================
+
+
+// =====================================================
+// SUPABASE
+// =====================================================
+
+const SUPABASE_URL =
+    "https://sqvmyigzayuqahzmkujn.supabase.co";
+
+const SUPABASE_KEY =
+    "sb_publishable_iUIRzSgR5tWjfv_7xiNQ3Q_bSoYZDtU";
+
+
+const supabaseClient =
+    window.supabase.createClient(
+        SUPABASE_URL,
+        SUPABASE_KEY
+    );
+
+
+
+// =====================================================
+// ELEMENTOS DOM
+// =====================================================
+
+const fleetContainer =
+    document.getElementById("fleetContainer");
+
+const lastUpdate =
+    document.getElementById("lastUpdate");
+
+const connectionIndicator =
+    document.getElementById("connectionIndicator");
+
+const connectionText =
+    document.getElementById("connectionText");
+
+
+// =====================================================
+// VALIDACIÓN
+// =====================================================
+
+if (!fleetContainer) {
+
+    console.error(
+        "FLEETOPS ERROR: #fleetContainer no encontrado."
+    );
+
+    throw new Error(
+        "FleetOps Dashboard: contenedor no encontrado."
+    );
+
+}
+
+
+// =====================================================
+// ESTADO
+// =====================================================
+
+let activeFilter = "all";
+
+let currentUnits = [];
+
+
+// =====================================================
+// CONEXIÓN
+// =====================================================
+
+function setConnectionStatus(connected) {
+
+    if (
+        !connectionIndicator ||
+        !connectionText
+    ) {
+        return;
+    }
+
+    connectionIndicator.classList.remove(
+        "connected",
+        "disconnected"
+    );
+
+    if (connected) {
+
+        connectionIndicator.classList.add(
+            "connected"
+        );
+
+        connectionText.innerText =
+            "CONNECTED";
+
+    }
+
+    else {
+
+        connectionIndicator.classList.add(
+            "disconnected"
+        );
+
+        connectionText.innerText =
+            "DATABASE ERROR";
+
+    }
+
+}
+
+
+// =====================================================
+// NORMALIZAR PATENTE
+// =====================================================
+
+function normalizePlate(value) {
+
+    return String(value || "")
+        .replace(/[^a-zA-Z0-9]/g, "")
+        .toUpperCase();
+
+}
+
+
+// =====================================================
+// FORMATEAR PATENTE
+// =====================================================
+
+function formatPlate(plate) {
+
+    const normalized =
+        normalizePlate(plate);
+
+    return normalized || "SIN PATENTE";
+
+}
+
+
+// =====================================================
+// ESCAPAR HTML
+// =====================================================
+
+function escapeHTML(value) {
+
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+}
+
+
+// =====================================================
+// CLASE CSS DEL ESTADO
+// =====================================================
+
+function getStatusClass(status) {
+
+    switch (status) {
+
+        case "En ruta":
+            return "green";
+
+        case "Esperando carga":
+            return "yellow";
+
+        case "Cargando":
+            return "purple";
+
+        case "Esperando descarga":
+            return "orange";
+
+        case "Descargando":
+            return "blue";
+
+        case "Finalizado":
+            return "gray";
+
+        case "Incidente":
+            return "red";
+
+        default:
+            return "gray";
+
+    }
+
+}
+
+
+// =====================================================
+// PRIORIDAD OPERACIONAL
+// =====================================================
+
+function getStatusPriority(status) {
+
+    switch (status) {
+
+        case "Incidente":
+            return 1;
+
+        case "En ruta":
+            return 2;
+
+        case "Esperando carga":
+            return 3;
+
+        case "Cargando":
+            return 4;
+
+        case "Esperando descarga":
+            return 5;
+
+        case "Descargando":
+            return 6;
+
+        case "Finalizado":
+            return 7;
+
+        default:
+            return 99;
+
+    }
+
+}
+
+
+// =====================================================
+// FECHA
+// =====================================================
+
+function formatTimestamp(timestamp) {
+
+    if (!timestamp) {
+        return "--";
+    }
+
+    const date =
+        new Date(timestamp);
+
+    if (
+        Number.isNaN(
+            date.getTime()
+        )
+    ) {
+        return "--";
+    }
+
+    return date.toLocaleString(
+        "es-CL",
+        {
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit"
+        }
+    );
+
+}
+
+
+// =====================================================
+// DURACIÓN
+// =====================================================
+
+function formatDuration(start, end) {
+
+    if (!start || !end) {
+        return "--";
+    }
+
+    const startDate =
+        new Date(start);
+
+    const endDate =
+        new Date(end);
+
+    const milliseconds =
+        endDate - startDate;
+
+    if (
+        !Number.isFinite(milliseconds) ||
+        milliseconds < 0
+    ) {
+        return "--";
+    }
+
+    const totalSeconds =
+        Math.floor(
+            milliseconds / 1000
+        );
+
+    const days =
+        Math.floor(
+            totalSeconds / 86400
+        );
+
+    const hours =
+        Math.floor(
+            (
+                totalSeconds % 86400
+            ) / 3600
+        );
+
+    const minutes =
+        Math.floor(
+            (
+                totalSeconds % 3600
+            ) / 60
+        );
+
+    const seconds =
+        totalSeconds % 60;
+
+    const parts = [];
+
+    if (days) {
+
+        parts.push(
+            `${days} día${days === 1 ? "" : "s"}`
+        );
+
+    }
+
+    if (hours) {
+
+        parts.push(
+            `${hours} hora${hours === 1 ? "" : "s"}`
+        );
+
+    }
+
+    if (minutes) {
+
+        parts.push(
+            `${minutes} minuto${minutes === 1 ? "" : "s"}`
+        );
+
+    }
+
+    if (
+        seconds ||
+        parts.length === 0
+    ) {
+
+        parts.push(
+            `${seconds} segundo${seconds === 1 ? "" : "s"}`
+        );
+
+    }
+
+    return parts.join(", ");
+
+}
+
+
+// =====================================================
+// DURACIÓN COMPACTA
+// =====================================================
+
+function formatDurationCompact(
+    start,
+    end
+) {
+
+    if (!start || !end) {
+        return "--";
+    }
+
+    const startDate =
+        new Date(start);
+
+    const endDate =
+        new Date(end);
+
+    const milliseconds =
+        endDate - startDate;
+
+    if (
+        !Number.isFinite(milliseconds) ||
+        milliseconds < 0
+    ) {
+        return "--";
+    }
+
+    const totalSeconds =
+        Math.floor(
+            milliseconds / 1000
+        );
+
+    const hours =
+        Math.floor(
+            totalSeconds / 3600
+        );
+
+    const minutes =
+        Math.floor(
+            (
+                totalSeconds % 3600
+            ) / 60
+        );
+
+    const seconds =
+        totalSeconds % 60;
+
+    if (hours > 0) {
+
+        return (
+            `${String(hours).padStart(2, "0")}:` +
+            `${String(minutes).padStart(2, "0")}:` +
+            `${String(seconds).padStart(2, "0")}`
+        );
+
+    }
+
+    return (
+        `${String(minutes).padStart(2, "0")}:` +
+        `${String(seconds).padStart(2, "0")}`
+    );
+
+}
+
+
+// =====================================================
+// CALCULAR DURACIÓN DE EVENTOS
+// =====================================================
+
+function buildEventTimeline(
+    reports,
+    trip
+) {
+
+    if (!trip) {
+        return [];
+    }
+
+    const tripReports =
+        reports
+            .filter(
+                report =>
+                    report.viaje_id ===
+                    trip.id
+            )
+            .sort(
+                (a, b) =>
+                    new Date(a.timestamp) -
+                    new Date(b.timestamp)
+            );
+
+    if (
+        tripReports.length === 0
+    ) {
+        return [];
+    }
+
+    return tripReports.map(
+        (report, index) => {
+
+            const nextReport =
+                tripReports[index + 1];
+
+            const start =
+                report.timestamp;
+
+            let end = null;
+
+            if (nextReport) {
+
+                end =
+                    nextReport.timestamp;
+
+            }
+
+            else if (
+                trip.fecha_finalizacion
+            ) {
+
+                end =
+                    trip.fecha_finalizacion;
+
+            }
+
+            return {
+
+                ...report,
+
+                start,
+                end,
+
+                duration:
+                    end
+                        ? formatDuration(
+                            start,
+                            end
+                        )
+                        : "--",
+
+                durationCompact:
+                    end
+                        ? formatDurationCompact(
+                            start,
+                            end
+                        )
+                        : "--"
+
+            };
+
+        }
+    );
+
+}
+
+
+// =====================================================
+// RESUMEN
+// =====================================================
+
+function updateSummary(units) {
+
+    const total =
+        document.getElementById("totalUnits");
+
+    const active =
+        document.getElementById("activeUnits");
+
+    const route =
+        document.getElementById("routeUnits");
+
+    const waiting =
+        document.getElementById("waitingUnits");
+
+    const loading =
+        document.getElementById("loadingUnits");
+
+    const incidents =
+        document.getElementById("incidentUnits");
+
+
+    const activeCount =
+        units.filter(
+            unit =>
+                unit.estado !==
+                "Finalizado"
+        ).length;
+
+
+    const routeCount =
+        units.filter(
+            unit =>
+                unit.estado ===
+                "En ruta"
+        ).length;
+
+
+    const waitingCount =
+        units.filter(
+            unit =>
+                unit.estado ===
+                    "Esperando carga" ||
+                unit.estado ===
+                    "Esperando descarga"
+        ).length;
+
+
+    const loadingCount =
+        units.filter(
+            unit =>
+                unit.estado ===
+                    "Cargando" ||
+                unit.estado ===
+                    "Descargando"
+        ).length;
+
+
+    const incidentCount =
+        units.filter(
+            unit =>
+                unit.estado ===
+                "Incidente"
+        ).length;
+
+
+    if (total) {
+        total.innerText =
+            units.length;
+    }
+
+    if (active) {
+        active.innerText =
+            activeCount;
+    }
+
+    if (route) {
+        route.innerText =
+            routeCount;
+    }
+
+    if (waiting) {
+        waiting.innerText =
+            waitingCount;
+    }
+
+    if (loading) {
+        loading.innerText =
+            loadingCount;
+    }
+
+    if (incidents) {
+        incidents.innerText =
+            incidentCount;
+    }
+
+}
+
+
+// =====================================================
+// CONTADORES DE FILTROS
+// =====================================================
+
+function updateFilterCounts(units) {
+
+    const count =
+        status =>
+            units.filter(
+                unit =>
+                    unit.estado ===
+                    status
+            ).length;
+
+
+    const elements = {
+
+        all:
+            document.getElementById(
+                "filterAllCount"
+            ),
+
+        route:
+            document.getElementById(
+                "filterRouteCount"
+            ),
+
+        waitingLoad:
+            document.getElementById(
+                "filterWaitingLoadCount"
+            ),
+
+        loading:
+            document.getElementById(
+                "filterLoadingCount"
+            ),
+
+        waitingUnload:
+            document.getElementById(
+                "filterWaitingUnloadCount"
+            ),
+
+        unloading:
+            document.getElementById(
+                "filterUnloadingCount"
+            ),
+
+        finished:
+            document.getElementById(
+                "filterFinishedCount"
+            ),
+
+        incident:
+            document.getElementById(
+                "filterIncidentCount"
+            )
+
+    };
+
+
+    if (elements.all) {
+        elements.all.innerText =
+            units.length;
+    }
+
+    if (elements.route) {
+        elements.route.innerText =
+            count("En ruta");
+    }
+
+    if (elements.waitingLoad) {
+        elements.waitingLoad.innerText =
+            count("Esperando carga");
+    }
+
+    if (elements.loading) {
+        elements.loading.innerText =
+            count("Cargando");
+    }
+
+    if (elements.waitingUnload) {
+        elements.waitingUnload.innerText =
+            count("Esperando descarga");
+    }
+
+    if (elements.unloading) {
+        elements.unloading.innerText =
+            count("Descargando");
+    }
+
+    if (elements.finished) {
+        elements.finished.innerText =
+            count("Finalizado");
+    }
+
+    if (elements.incident) {
+        elements.incident.innerText =
+            count("Incidente");
+    }
+
+}
+
+
+// =====================================================
+// TARJETA DE UNIDAD
+// =====================================================
+
+function createUnitCard(unit) {
+
+    const card =
+        document.createElement(
+            "div"
+        );
+
+
+    const statusClass =
+        getStatusClass(
+            unit.estado
+        );
+
+
+    card.className =
+        `unit-card ${statusClass}`;
+
+
+    const plate =
+        formatPlate(
+            unit.patente
+        );
+
+
+    const conductor =
+        unit.conductor ||
+        "SIN CONDUCTOR";
+
+
+    const empresa =
+        unit.empresa ||
+        "SIN EMPRESA";
+
+
+    const ruta =
+        unit.ruta ||
+        "SIN RUTA";
+
+
+    const estado =
+        unit.estado ||
+        "SIN ESTADO";
+
+
+    const observacion =
+        unit.observacion ||
+        "Sin reporte operacional";
+
+
+    const timestamp =
+        formatTimestamp(
+            unit.timestamp ||
+            unit.fecha_inicio
+        );
+
+
+    let mapsButton = "";
+
+
+    if (unit.google_maps) {
+
+        mapsButton = `
+
+            <a
+                class="maps-button"
+                href="${escapeHTML(unit.google_maps)}"
+                target="_blank"
+                rel="noopener noreferrer">
+
+                VER EN GOOGLE MAPS
+
+            </a>
+
+        `;
+
+    }
+
+    else if (
+        unit.latitud !== null &&
+        unit.latitud !== undefined &&
+        unit.longitud !== null &&
+        unit.longitud !== undefined
+    ) {
+
+        const mapsURL =
+            `https://www.google.com/maps?q=${encodeURIComponent(
+                unit.latitud
+            )},${encodeURIComponent(
+                unit.longitud
+            )}`;
+
+
+        mapsButton = `
+
+            <a
+                class="maps-button"
+                href="${mapsURL}"
+                target="_blank"
+                rel="noopener noreferrer">
+
+                VER EN GOOGLE MAPS
+
+            </a>
+
+        `;
+
+    }
+
+
+    const totalDuration =
+        unit.fecha_finalizacion
+            ? formatDurationCompact(
+                unit.fecha_inicio,
+                unit.fecha_finalizacion
+            )
+            : "--";
+
+
+    const timelineHTML =
+        unit.timeline &&
+        unit.timeline.length > 0
+            ? `
+
+                <div class="trip-timeline">
+
+                    <div class="timeline-title">
+                        HISTORIAL OPERACIONAL
+                    </div>
+
+                    ${unit.timeline.map(
+                        event => {
+
+                            const eventClass =
+                                getStatusClass(
+                                    event.estado
+                                );
+
+                            return `
+
+                                <div class="timeline-event">
+
+                                    <div class="timeline-marker ${eventClass}">
+                                    </div>
+
+                                    <div class="timeline-content">
+
+                                        <div class="timeline-header">
+
+                                            <span class="timeline-status">
+                                                ${escapeHTML(
+                                                    event.estado
+                                                )}
+                                            </span>
+
+                                            <span class="timeline-duration">
+                                                ${escapeHTML(
+                                                    event.durationCompact
+                                                )}
+                                            </span>
+
+                                        </div>
+
+                                        <div class="timeline-time">
+
+                                            ${escapeHTML(
+                                                formatTimestamp(
+                                                    event.start
+                                                )
+                                            )}
+
+                                            ${
+                                                event.end
+                                                    ? " → " +
+                                                      escapeHTML(
+                                                          formatTimestamp(
+                                                              event.end
+                                                          )
+                                                      )
+                                                    : ""
+                                            }
+
+                                        </div>
+
+                                        ${
+                                            event.observacion
+                                                ? `
+
+                                                    <div class="timeline-observation">
+
+                                                        ${escapeHTML(
+                                                            event.observacion
+                                                        )}
+
+                                                    </div>
+
+                                                `
+                                                : ""
+                                        }
+
+                                    </div>
+
+                                </div>
+
+                            `;
+
+                        }
+                    ).join("")}
+
+                </div>
+
+            `
+            : "";
+
+
+    card.innerHTML = `
+
+        <div class="unit-header">
+
+            <div>
+
+                <div class="unit-plate">
+
+                    ${escapeHTML(
+                        plate
+                    )}
+
+                </div>
+
+                <div class="unit-driver">
+
+                    ${escapeHTML(
+                        conductor
+                    )}
+
+                </div>
+
+            </div>
+
+            <div class="status-badge ${statusClass}">
+
+                ${escapeHTML(
+                    estado
+                )}
+
+            </div>
+
+        </div>
+
+
+        <div class="unit-data">
+
+            <div class="data-row">
+
+                <span class="data-label">
+                    EMPRESA
+                </span>
+
+                <span class="data-value">
+                    ${escapeHTML(
+                        empresa
+                    )}
+                </span>
+
+            </div>
+
+
+            <div class="data-row">
+
+                <span class="data-label">
+                    RUTA
+                </span>
+
+                <span class="data-value">
+                    ${escapeHTML(
+                        ruta
+                    )}
+                </span>
+
+            </div>
+
+
+            <div class="data-row">
+
+                <span class="data-label">
+                    ÚLTIMO REPORTE
+                </span>
+
+                <span class="data-value">
+                    ${escapeHTML(
+                        timestamp
+                    )}
+                </span>
+
+            </div>
+
+
+            <div class="data-row">
+
+                <span class="data-label">
+                    DURACIÓN VIAJE
+                </span>
+
+                <span class="data-value">
+                    ${escapeHTML(
+                        totalDuration
+                    )}
+                </span>
+
+            </div>
+
+
+            <div class="data-row">
+
+                <span class="data-label">
+                    VIAJE ID
+                </span>
+
+                <span class="data-value">
+                    ${escapeHTML(
+                        unit.viaje_id ||
+                        "PENDIENTE"
+                    )}
+                </span>
+
+            </div>
+
+
+            <div class="data-row">
+
+                <span class="data-label">
+                    OBSERVACIÓN
+                </span>
+
+                <span class="data-value">
+                    ${escapeHTML(
+                        observacion
+                    )}
+                </span>
+
+            </div>
+
+        </div>
+
+
+        ${timelineHTML}
+
+
+        ${mapsButton}
+
+    `;
+
+    return card;
+
+}
+
+
+// =====================================================
+// RENDER FILTRADO
+// =====================================================
+
+function renderFilteredUnits() {
+
+    let filteredUnits;
+
+
+    if (
+        activeFilter === "all"
+    ) {
+
+        filteredUnits =
+            currentUnits;
+
+    }
+
+    else {
+
+        filteredUnits =
+            currentUnits.filter(
+                unit =>
+                    unit.estado ===
+                    activeFilter
+            );
+
+    }
+
+
+    fleetContainer.innerHTML = "";
+
+
+    if (
+        filteredUnits.length === 0
+    ) {
+
+        fleetContainer.innerHTML = `
+
+            <div class="empty-state">
+
+                <div class="empty-code">
+                    NO DATA
+                </div>
+
+                <div class="empty-title">
+                    SIN UNIDADES EN ESTE ESTADO
+                </div>
+
+                <div class="empty-text">
+                    No existen unidades que coincidan con el filtro seleccionado.
+                </div>
+
+            </div>
+
+        `;
+
+        return;
+
+    }
+
+
+    filteredUnits.forEach(
+        unit => {
+
+            fleetContainer.appendChild(
+                createUnitCard(
+                    unit
+                )
+            );
+
+        }
+    );
+
+}
+
+
+// =====================================================
+// CONSTRUIR UNIDADES
+// =====================================================
+
+function buildUnits(
+    trips,
+    reports
+) {
+
+    const units = [];
+
+
+    trips.forEach(
+        trip => {
+
+            const tripId =
+                trip.id;
+
+
+            const tripReports =
+                reports.filter(
+                    report =>
+                        report.viaje_id ===
+                        tripId
+                );
+
+
+            let latestReport =
+                null;
+
+
+            if (
+                tripReports.length > 0
+            ) {
+
+                latestReport =
+                    [...tripReports].sort(
+                        (a, b) =>
+                            new Date(b.timestamp) -
+                            new Date(a.timestamp)
+                    )[0];
+
+            }
+
+
+            const timeline =
+                buildEventTimeline(
+                    reports,
+                    trip
+                );
+
+
+            const unit = {
+
+                viaje_id:
+                    trip.id,
+
+                patente:
+                    normalizePlate(
+                        trip.patente
+                    ),
+
+                conductor:
+                    trip.conductor ||
+                    null,
+
+                empresa:
+                    trip.empresa ||
+                    null,
+
+                ruta:
+                    trip.ruta ||
+                    null,
+
+                estado:
+                    trip.fecha_finalizacion
+                        ? "Finalizado"
+                        :
+                        (
+                            latestReport?.estado ||
+                            trip.estado ||
+                            "En ruta"
+                        ),
+
+                fecha_inicio:
+                    trip.fecha_inicio ||
+                    trip.created_at,
+
+                fecha_finalizacion:
+                    trip.fecha_finalizacion ||
+                    null,
+
+                timestamp:
+                    latestReport?.timestamp ||
+                    trip.fecha_finalizacion ||
+                    trip.fecha_inicio ||
+                    trip.created_at,
+
+                latitud:
+                    latestReport?.latitud ??
+                    null,
+
+                longitud:
+                    latestReport?.longitud ??
+                    null,
+
+                precision_gps:
+                    latestReport?.precision_gps ??
+                    null,
+
+                google_maps:
+                    latestReport?.google_maps ??
+                    null,
+
+                observacion:
+                    latestReport?.observacion ??
+                    null,
+
+                timeline:
+                    timeline
+
+            };
+
+
+            units.push(unit);
+
+        }
+    );
+
+
+    return units;
+
+}
+
+
+// =====================================================
+// FALLBACK LEGACY
+// =====================================================
+
+function buildLegacyUnits(
+    reports
+) {
+
+    const latestByPlate = {};
+
+
+    reports.forEach(
+        report => {
+
+            const plate =
+                normalizePlate(
+                    report.patente
+                );
+
+
+            if (!plate) {
+                return;
+            }
+
+
+            const existing =
+                latestByPlate[plate];
+
+
+            if (
+                !existing ||
+                new Date(report.timestamp) >
+                new Date(existing.timestamp)
+            ) {
+
+                latestByPlate[plate] = {
+
+                    viaje_id:
+                        report.viaje_id ||
+                        null,
+
+                    patente:
+                        plate,
+
+                    conductor:
+                        report.conductor ||
+                        null,
+
+                    empresa:
+                        report.empresa ||
+                        null,
+
+                    ruta:
+                        report.ruta ||
+                        null,
+
+                    estado:
+                        report.estado ||
+                        "En ruta",
+
+                    fecha_inicio:
+                        report.timestamp ||
+                        report.created_at,
+
+                    fecha_finalizacion:
+                        report.estado ===
+                        "Finalizado"
+                            ? report.timestamp
+                            : null,
+
+                    timestamp:
+                        report.timestamp ||
+                        report.created_at,
+
+                    latitud:
+                        report.latitud ??
+                        null,
+
+                    longitud:
+                        report.longitud ??
+                        null,
+
+                    precision_gps:
+                        report.precision_gps ??
+                        null,
+
+                    google_maps:
+                        report.google_maps ??
+                        null,
+
+                    observacion:
+                        report.observacion ||
+                        null,
+
+                    timeline: []
+
+                };
+
+            }
+
+        }
+    );
+
+
+    return Object.values(
+        latestByPlate
+    );
+
+}
+
+
+// =====================================================
+// ORDENAR UNIDADES
+// =====================================================
+
+function sortUnits(
+    units
+) {
+
+    return units.sort(
+        (a, b) => {
+
+            const priorityA =
+                getStatusPriority(
+                    a.estado
+                );
+
+
+            const priorityB =
+                getStatusPriority(
+                    b.estado
+                );
+
+
+            if (
+                priorityA !==
+                priorityB
+            ) {
+
+                return (
+                    priorityA -
+                    priorityB
+                );
+
+            }
+
+
+            return (
+                new Date(b.timestamp) -
+                new Date(a.timestamp)
+            );
+
+        }
+    );
+
+}
+
+
+// =====================================================
+// RENDER PRINCIPAL
+// =====================================================
+
+function renderDashboard(
+    trips,
+    reports
+) {
+
+    let units;
+
+
+    if (
+        trips.length > 0
+    ) {
+
+        console.log(
+            "FLEETOPS: usando arquitectura VIAJES + REPORTES."
+        );
+
+
+        units =
+            buildUnits(
+                trips,
+                reports
+            );
+
+    }
+
+    else {
+
+        console.log(
+            "FLEETOPS: tabla VIAJES vacía. Usando REPORTES como fuente legacy."
+        );
+
+
+        units =
+            buildLegacyUnits(
+                reports
+            );
+
+    }
+
+
+    units =
+        sortUnits(
+            units
+        );
+
+
+    currentUnits =
+        units;
+
+
+    updateSummary(
+        units
+    );
+
+
+    updateFilterCounts(
+        units
+    );
+
+
+    renderFilteredUnits();
+
+
+    if (lastUpdate) {
+
+        lastUpdate.innerText =
+            formatTimestamp(
+                new Date().toISOString()
+            );
+
+    }
+
+}
+
+
+// =====================================================
+// CARGAR VIAJES
+// =====================================================
+
+async function loadTrips() {
+
+    console.log(
+        "FLEETOPS: cargando viajes..."
+    );
+
+
+    const {
+        data,
+        error
+    } =
+        await supabaseClient
+            .from("viajes")
+            .select(`
+                id,
+                patente,
+                conductor,
+                empresa,
+                ruta,
+                estado,
+                fecha_inicio,
+                fecha_finalizacion,
+                created_at
+            `)
+            .order(
+                "created_at",
+                {
+                    ascending: false
+                }
+            );
+
+
+    if (error) {
+
+        throw new Error(
+            "Error cargando viajes: " +
+            error.message
+        );
+
+    }
+
+
+    return data || [];
+
+}
+
+
+// =====================================================
+// CARGAR REPORTES
+// =====================================================
+
+async function loadReports() {
+
+    console.log(
+        "FLEETOPS: cargando reportes..."
+    );
+
+
+    const {
+        data,
+        error
+    } =
+        await supabaseClient
+            .from("reportes")
+            .select(`
+                id,
+                viaje_id,
+                conductor,
+                patente,
+                empresa,
+                ruta,
+                estado,
+                latitud,
+                longitud,
+                precision_gps,
+                google_maps,
+                observacion,
+                timestamp,
+                created_at
+            `)
+            .order(
+                "timestamp",
+                {
+                    ascending: false
+                }
+            );
+
+
+    if (error) {
+
+        throw new Error(
+            "Error cargando reportes: " +
+            error.message
+        );
+
+    }
+
+
+    return data || [];
+
+}
+
+
+// =====================================================
+// DASHBOARD
+// =====================================================
+
+async function loadDashboard() {
+
+    console.log(
+        "FLEETOPS: actualizando dashboard..."
+    );
+
+
+    try {
+
+        const [
+            trips,
+            reports
+        ] =
+            await Promise.all(
+                [
+                    loadTrips(),
+                    loadReports()
+                ]
+            );
+
+
+        setConnectionStatus(
+            true
+        );
+
+
+        renderDashboard(
+            trips,
+            reports
+        );
+
+    }
+
+    catch (error) {
+
+        console.error(
+            "FLEETOPS DATABASE ERROR:",
+            error
+        );
+
+
+        setConnectionStatus(
+            false
+        );
+
+
+        fleetContainer.innerHTML = `
+
+            <div class="empty-state">
+
+                <div class="empty-code">
+                    DATABASE ERROR
+                </div>
+
+                <div class="empty-title">
+                    ERROR AL CARGAR DATOS
+                </div>
+
+                <div class="empty-text">
+                    No fue posible obtener los datos operacionales desde Supabase.
+                </div>
+
+            </div>
+
+        `;
+
+    }
+
+}
+
+
+// =====================================================
+// FILTROS
+// =====================================================
+
+document
+    .querySelectorAll(
+        ".filter-button"
+    )
+    .forEach(
+        button => {
+
+            button.addEventListener(
+                "click",
+                function () {
+
+                    document
+                        .querySelectorAll(
+                            ".filter-button"
+                        )
+                        .forEach(
+                            btn => {
+
+                                btn.classList.remove(
+                                    "active"
+                                );
+
+                            }
+                        );
+
+
+                    this.classList.add(
+                        "active"
+                    );
+
+
+                    activeFilter =
+                        this.dataset.filter;
+
+
+                    renderFilteredUnits();
+
+                }
+            );
+
+        }
+    );
+
+
+// =====================================================
+// INICIALIZACIÓN
+// =====================================================
+
+console.log(
+    "PRÆTOR FleetOps Dashboard iniciado."
+);
+
+
+loadDashboard();
+
+
+// =====================================================
+// ACTUALIZACIÓN AUTOMÁTICA
+// =====================================================
+
+setInterval(
+    loadDashboard,
+    10000
+);
